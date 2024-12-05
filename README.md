@@ -19,5 +19,5 @@ This is a Node.js-based API for uploading large media files (videos or documents
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/media-upload-api.git
+   git clone [https://github.com/your-username/media-upload-api.git](https://github.com/mohammedanshad1/file-upload-api.git)
    cd media-upload-api
