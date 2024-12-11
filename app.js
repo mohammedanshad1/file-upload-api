@@ -2,162 +2,66 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 
 const app = express();
 const port = 3000;
 
-// Middleware to parse JSON request bodies
-app.use(express.json());
+// Serve the uploads folder statically
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// Directory for storing uploaded chunks and final files
-const UPLOAD_DIR = path.join(__dirname, 'uploads');
-if (!fs.existsSync(UPLOAD_DIR)) {
-  fs.mkdirSync(UPLOAD_DIR);
-}
-
-// Temporary storage for upload metadata
-const uploadStatus = new Map();
-
-// Set up multer storage engine for chunk uploads
+// Set up storage engine for multer
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, UPLOAD_DIR);
+    const uploadPath = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath);
+    }
+    cb(null, uploadPath);
   },
   filename: (req, file, cb) => {
-    const { identifier, chunkNumber } = req.body;
-    cb(null, `${identifier}_chunk_${chunkNumber}`);
+    cb(null, Date.now() + path.extname(file.originalname)); // Append timestamp to filename
   }
 });
 
-const upload = multer({ storage });
+// File size validation
+const fileFilter = (req, file, cb) => {
+    const fileSize = parseInt(req.headers['content-length']);
+    const maxSize = 100 * 1024 * 1024; // 100MB in bytes
+  
+    if (fileSize > maxSize) {
+      return cb(new Error('File size must be below 100MB'), false);
+    }
+  
+    cb(null, true);
+  };
+const upload = multer({ storage: storage, fileFilter: fileFilter });
 
-// Route to initiate an upload
-app.post('/upload/start', (req, res) => {
-  const { fileName, fileSize, fileType, totalChunks } = req.body;
-  if (!fileName || !fileSize || !fileType || !totalChunks) {
-    return res.status(400).json({ error: 'Missing required parameters.' });
+// Define the file upload route
+app.post('/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).send('No file uploaded.');
   }
 
-  // Generate a unique identifier for this upload
-  const uniqueIdentifier = crypto.randomBytes(16).toString('hex');
-
-  // Initialize upload metadata
-  uploadStatus.set(uniqueIdentifier, {
-    fileName,
-    fileSize,
-    fileType,
-    totalChunks: parseInt(totalChunks),
-    uploadedChunks: [],
-    status: 'started',
-    uploadPath: path.join(UPLOAD_DIR, fileName)
-  });
-
-  res.status(200).json({
-    uploadIdentifier: uniqueIdentifier,
-    message: 'Upload initialized.'
+  res.status(200).send({
+    message: 'File uploaded successfully!',
+    filename: req.file.filename
   });
 });
 
-// Route to upload a chunk
-app.post('/upload/chunk', upload.single('chunk'), (req, res) => {
-  const { identifier, chunkNumber } = req.body;
-  if (!identifier || !chunkNumber) {
-    return res.status(400).json({ error: 'Missing required parameters.' });
-  }
+// Define the route to retrieve all files in the uploads directory
+app.get('/files', (req, res) => {
+  const uploadPath = path.join(__dirname, 'uploads');
 
-  const status = uploadStatus.get(identifier);
-  if (!status) {
-    return res.status(404).json({ error: 'Upload not found.' });
-  }
-
-  if (status.status === 'paused') {
-    return res.status(403).json({ error: 'Upload is paused.' });
-  }
-
-  // Prevent duplicate chunk uploads
-  if (status.uploadedChunks.includes(chunkNumber)) {
-    return res.status(400).json({ error: 'Chunk already uploaded.' });
-  }
-
-  // Add the uploaded chunk to the status
-  status.uploadedChunks.push(chunkNumber);
-
-  // Check if upload is complete
-  if (status.uploadedChunks.length === status.totalChunks) {
-    status.status = 'completed';
-
-    // Merge chunks into the final file
-    const finalFilePath = status.uploadPath;
-    const writeStream = fs.createWriteStream(finalFilePath);
-
-    for (let i = 1; i <= status.totalChunks; i++) {
-      const chunkPath = path.join(UPLOAD_DIR, `${identifier}_chunk_${i}`);
-      const data = fs.readFileSync(chunkPath);
-      writeStream.write(data);
-      fs.unlinkSync(chunkPath); // Delete chunk after merging
+  fs.readdir(uploadPath, (err, files) => {
+    if (err) {
+      return res.status(500).send('Unable to scan directory: ' + err);
     }
 
-    writeStream.end();
-  }
+    const fileUrls = files.map(file => `http://localhost:3000/uploads/${file}`);
 
-  uploadStatus.set(identifier, status);
-
-  res.status(200).json({
-    message: 'Chunk uploaded successfully.',
-    uploadedChunks: status.uploadedChunks
-  });
-});
-
-// Route to pause upload
-app.post('/upload/pause', (req, res) => {
-  const { identifier } = req.body;
-
-  const status = uploadStatus.get(identifier);
-  if (!status) {
-    return res.status(404).json({ error: 'Upload not found.' });
-  }
-
-  status.status = 'paused';
-  uploadStatus.set(identifier, status);
-
-  res.status(200).json({
-    message: 'Upload paused.',
-    uploadedChunks: status.uploadedChunks
-  });
-});
-
-// Route to resume upload
-app.post('/upload/resume', (req, res) => {
-  const { identifier } = req.body;
-
-  const status = uploadStatus.get(identifier);
-  if (!status) {
-    return res.status(404).json({ error: 'Upload not found.' });
-  }
-
-  status.status = 'resumed';
-  uploadStatus.set(identifier, status);
-
-  res.status(200).json({
-    message: 'Upload resumed.',
-    uploadedChunks: status.uploadedChunks
-  });
-});
-
-// Route to check upload status
-app.get('/upload/status/:identifier', (req, res) => {
-  const { identifier } = req.params;
-
-  const status = uploadStatus.get(identifier);
-  if (!status) {
-    return res.status(404).json({ error: 'Upload not found.' });
-  }
-
-  res.status(200).json({
-    status: status.status,
-    uploadedChunks: status.uploadedChunks,
-    totalChunks: status.totalChunks
+    res.status(200).send({
+      files: fileUrls
+    });
   });
 });
 
@@ -175,3 +79,4 @@ app.use((err, req, res, next) => {
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
 });
+
