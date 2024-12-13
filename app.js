@@ -57,7 +57,9 @@ app.get('/files', (req, res) => {
       return res.status(500).send('Unable to scan directory: ' + err);
     }
 
-    const fileUrls = files.map(file => `http://localhost:3000/uploads/${file}`);
+    // const fileUrls = files.map(file => `http://localhost:3000/uploads/${file}`);
+    const baseUrl = 'https://file-upload-api-7vv2.onrender.com';
+    const fileUrls = files.map(file => `${baseUrl}/uploads/${file}`);
 
     res.status(200).send({
       files: fileUrls
